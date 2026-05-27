@@ -1,0 +1,44 @@
+---
+# Ingress Controller: nginx-ingress (https://kubernetes.github.io/ingress-nginx/)
+# Install: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+#
+# TLS: cert-manager with Let's Encrypt (https://cert-manager.io/)
+# Install: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atp-ingress
+  namespace: ai-task-platform
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Rate limiting at the ingress level
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    # cert-manager TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - ai-tasks.yourdomain.com
+      secretName: atp-tls-cert
+  rules:
+    - host: ai-tasks.yourdomain.com
+      http:
+        paths:
+          # API requests → backend
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend-service
+                port:
+                  number: 5000
+          # Everything else → frontend (React SPA)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80

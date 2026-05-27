@@ -1,0 +1,72 @@
+---
+# Queue Recovery CronJob
+# Re-enqueues tasks stuck in "pending" status (e.g., after Redis crash/restart).
+# Runs every 5 minutes; idempotent — the worker ignores already-processed tasks.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: queue-recovery
+  namespace: ai-task-platform
+spec:
+  schedule: "*/5 * * * *"   # Every 5 minutes
+  concurrencyPolicy: Forbid  # Don't run overlapping jobs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120  # Kill if running > 2 minutes
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: recovery
+              image: python:3.12-slim
+              command: ["python", "-c"]
+              args:
+                - |
+                  import os, redis, pymongo
+                  from bson import ObjectId
+
+                  REDIS_HOST = os.environ["REDIS_HOST"]
+                  REDIS_PORT = int(os.environ.get("REDIS_PORT", 6379))
+                  MONGODB_URI = os.environ["MONGODB_URI"]
+                  QUEUE_KEY = "tasks:queue"
+
+                  # Connect
+                  r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+                  client = pymongo.MongoClient(MONGODB_URI)
+                  db = client[MONGODB_URI.split("/")[-1].split("?")[0]]
+
+                  # Find pending tasks not already in queue
+                  queue_len = r.llen(QUEUE_KEY)
+                  print(f"Queue length before recovery: {queue_len}")
+
+                  # Get IDs currently in queue (avoid duplicates)
+                  queued_ids = set(r.lrange(QUEUE_KEY, 0, -1))
+
+                  # Find pending tasks created more than 60s ago (unlikely to be just-created)
+                  import datetime
+                  cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=60)
+                  pending = db.tasks.find({
+                    "status": "pending",
+                    "createdAt": {"$lt": cutoff}
+                  })
+
+                  recovered = 0
+                  for task in pending:
+                    task_id = str(task["_id"])
+                    if task_id not in queued_ids:
+                      r.rpush(QUEUE_KEY, task_id)
+                      recovered += 1
+
+                  print(f"Re-enqueued {recovered} stuck pending tasks")
+              envFrom:
+                - configMapRef:
+                    name: app-config
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "100m"
+                  memory: "128Mi"

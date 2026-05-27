@@ -1,0 +1,96 @@
+---
+# Worker Deployment
+# Workers are stateless and horizontally scalable.
+# Each worker uses BLPOP which distributes tasks fairly across pods.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: ai-task-platform
+  labels:
+    app: worker
+spec:
+  replicas: 2  # Base replica count; HPA will scale up/down
+  selector:
+    matchLabels:
+      app: worker
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      # Allow graceful shutdown: worker finishes current task before terminating
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: sireeshamanku/atp-worker:v1  # Updated by CI/CD
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: LOG_LEVEL
+              value: "INFO"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          # No HTTP port; liveness checks the process is alive
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "worker.py"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+---
+# Horizontal Pod Autoscaler
+# Scales workers 2-10 based on CPU utilization.
+# For queue-depth scaling, consider KEDA (Kubernetes Event-Driven Autoscaler).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: ai-task-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 min before scaling down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

@@ -1,0 +1,46 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-task-platform
+  namespace: argocd  # Argo CD is installed in the argocd namespace
+  # Auto-delete child resources when Application is deleted
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  # ── Source: Your infra (GitOps) repository ────────────────────────────────
+  source:
+    repoURL: https://github.com/your-org/ai-task-platform-infra
+    targetRevision: main
+    path: manifests  # Directory containing all K8s YAML files
+
+  # ── Destination cluster & namespace ────────────────────────────────────────
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ai-task-platform
+
+  # ── Sync Policy ────────────────────────────────────────────────────────────
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources removed from Git
+      selfHeal: true    # Re-sync if cluster state drifts from Git
+      allowEmpty: false # Never apply empty manifests
+    syncOptions:
+      - CreateNamespace=true  # Create namespace if it doesn't exist
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true        # Prune after all resources are synced
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # ── Health checks ──────────────────────────────────────────────────────────
+  ignoreDifferences:
+    # Ignore HPA's current replicas (managed by autoscaler, not Git)
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/currentReplicas
