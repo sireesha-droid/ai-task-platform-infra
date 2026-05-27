@@ -18,13 +18,8 @@ metadata:
     # cert-manager TLS
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
-  tls:
-    - hosts:
-        - ai-tasks.yourdomain.com
-      secretName: atp-tls-cert
   rules:
-    - host: ai-tasks.yourdomain.com
-      http:
+    - http:
         paths:
           # API requests → backend
           - path: /api
